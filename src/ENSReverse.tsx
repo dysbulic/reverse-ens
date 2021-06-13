@@ -104,22 +104,6 @@ export default () => {
     setAddrs(as => ({ ...as, [key]: val }))
   }
 
-  const netSet = () => {
-    const net = (() => {
-      switch(parseInt(ethereum.networkVersion)) {
-        case 1: return 'mainnet'
-        case 2: return 'Morden'
-        case 3: return 'Ropsten'
-        case 4: return 'Rinkeby'
-        case 42: return 'Kovan'
-        case 100: return 'xDAI'
-        default: return `unknown (id:${ethereum.networkVersion})`
-      }
-    })()
-    updateAddr('net', net)
-    console.log(Object.assign({}, NET[net]))
-    setAddrs(as => Object.assign({}, as, NET[net]))
-  }
   ethereum.on('networkChanged', () => {
     setAddrs({})
     setTracts({})
@@ -166,8 +150,21 @@ export default () => {
         const log = logger('color: orange; background-color: purple')
 
         log('Setting addrs.net')
-        netSet()
-
+        const net = (() => {
+          switch(parseInt(ethereum.networkVersion)) {
+            case 1: return 'mainnet'
+            case 2: return 'Morden'
+            case 3: return 'Ropsten'
+            case 4: return 'Rinkeby'
+            case 42: return 'Kovan'
+            case 100: return 'xDAI'
+            default: return `unknown (id:${ethereum.networkVersion})`
+          }
+        })()
+        updateAddr('net', net)
+        log('OBJ', Object.assign({}, NET[net]))
+        setAddrs(as => Object.assign({}, as, NET[net]))
+      
         log('Adding Reverse Address')
         updateAddr(
           'rev',
