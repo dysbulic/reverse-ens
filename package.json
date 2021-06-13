@@ -1,7 +1,10 @@
 {
   "name": "reverse-ens",
+  "author": "Will Holcomb <dys@dhappy.org>",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "homepage": "https://dysbulic.dhappy.org/reverse-ens",
+  "license": "MIT",
   "dependencies": {
     "@testing-library/jest-dom": "^5.11.4",
     "@testing-library/react": "^11.1.0",
