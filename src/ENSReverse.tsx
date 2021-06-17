@@ -3,7 +3,7 @@ import Web3 from 'web3'
 import MetamaskOnboarding from '@metamask/onboarding'
 import {
   Stack, Input, Container, Flex, Button, Text, Box,
-  Grid, useClipboard, useToast, Spinner,
+  Grid, useClipboard, useToast, Spinner, Tooltip,
 } from '@chakra-ui/react'
 import { AbiItem } from 'web3-utils'
 import { Contract } from 'web3-eth-contract'
@@ -49,6 +49,17 @@ interface Parameters {
   name?: string
 }
 
+const tooltips: Record<string, string> = {
+  self: 'This is the address of your wallet. The reverse record is an ENS name that is returned when users search on this address. There is only one reverse record per address.',
+  net: 'The currently selected ethereum chain. In general ENS resolution is done on the mainnet, but instances exist on some of the test chains as well.',
+  registrar: 'This is the contract that controls name registration for the reverse records.',
+  reverse: 'This is a specially formatted address that is used to look up your reverse record.',
+  address: "The forward resolution for the currently selected name to use for the reverse record. There is no technical requirement that this resolve to your wallet address, but if it doesn't, many implementations will disregard the record.", 
+  resolver: 'This is the contract address for the resolver for the resolution of reverse entries.',
+  owner: 'When you create a reverse entry, you are set as the owner of the reverse address.',
+  name: 'This is the currently configured reverse record for your wallet address.',
+}
+
 // eslint-disable-next-line import/no-anonymous-default-export
 export default () => {
   const onboarding = new MetamaskOnboarding()
@@ -59,10 +70,10 @@ export default () => {
     net: 'Current Network',
     registrar: 'Reverse Registrar Address',
     reverse: 'Reverse Address',
-    address: null as string | null,
     resolver: 'Resolver Address',
+    address: null as string | null,
     owner: 'Reverse Lookup Owner',
-    name: 'Reverse Lookup',
+    name: 'Current Reverse',
   })
   const [addrs, setAddrs] = useState<Addresses>({})
   const [tracts, setTracts] = useState<Contracts>({})
@@ -332,9 +343,14 @@ export default () => {
                 key={i} display="contents"
                 sx={{ '&:hover > *': { bg: '#FBFF0522' } }}
               >
-                <Text m={0} textAlign="right" pr={5} minW="12em">
-                  {title}:
-                </Text>
+                <Tooltip
+                  hasArrow placement="right"
+                  label={tooltips[key]}
+                >
+                  <Text m={0} textAlign="right" pr={5} minW="12em">
+                    {title}:
+                  </Text>
+                </Tooltip>
                 <Text m={0} textOverflow="clip" whiteSpace="nowrap" title={addrs[key]}>
                   {addrs[key] && (
                     <Button
