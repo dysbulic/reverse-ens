@@ -6,7 +6,7 @@ import {
 } from '@chakra-ui/react'
 import { AbiItem } from 'web3-utils'
 import { Contract } from 'web3-eth-contract'
-import { abi as revRegistrarABI } from '@ensdomains/ens-contracts/artifacts/contracts/registry/ReverseRegistrar.sol/ReverseRegistrar.json'
+import { abi as registrarABI } from '@ensdomains/ens-contracts/artifacts/contracts/registry/ReverseRegistrar.sol/ReverseRegistrar.json'
 import { useParams } from 'react-router-dom'
 import { CopyIcon } from '@chakra-ui/icons'
 
@@ -30,19 +30,17 @@ interface Addresses extends Partial<Record<string, string>> {
   self?: string
   address?: string
   owner?: string
-  rev?: string
+  reverse?: string
   net?: string
   resolver?: string
-  revRegistrar?: string
-  ens?: string
-  defaultResolver?: string
-  revOwner?: string
-  revName?: string
+  registrar?: string
+  name?: string
 }
 
 interface Contracts {
-  revResolver?: Contract
-  revRegistrar?: Contract
+  resolver?: Contract
+  registrar?: Contract
+  reverseResolver?: Contract
 }
 
 interface Parameters {
@@ -53,19 +51,16 @@ interface Parameters {
 export default () => {
   const onboarding = new MetamaskOnboarding()
   const params = useParams<Parameters>()
-  const [name, setName] = useState(
-    params.name || 'subdomain.ensname.eth'
-  )
+  const [name, setName] = useState(params.name)
   const [titles, setTitles] = useState({
     self: 'Your Address',
     net: 'Current Network',
-    revRegistrar: 'Reverse Registrar Address',
-    rev: 'Reverse Address',
-    owner: null as string | null,
+    registrar: 'Reverse Registrar Address',
+    reverse: 'Reverse Address',
     address: null as string | null,
-    revOwner: `Reverse Lookup Owner`,
     resolver: 'Resolver Address',
-    revName: 'Reverse Lookup',
+    owner: 'Reverse Lookup Owner',
+    name: 'Reverse Lookup',
   })
   const [addrs, setAddrs] = useState<Addresses>({})
   const [tracts, setTracts] = useState<Contracts>({})
@@ -82,24 +77,27 @@ export default () => {
     setAddrs({})
     setTracts({})
   }
-  ethereum?.on('chainChanged', reset)
-  ethereum?.on('accountsChanged',
-    (accts: string[]) => {
+  useEffect(() => {
+    ethereum?.on('chainChanged', reset)
+    return () => ethereum?.off('chainChanged', reset)
+  }, [])
+  useEffect(() => {
+    const resetAndSet = (accts: string[]) => {
       reset()
       updateAddr({ self: accts[0] })
     }
-  )
+    ethereum?.on('accountsChanged', resetAndSet)
+    return () => ethereum?.off(
+      'accountsChanged', resetAndSet
+    )
+  }, [])
 
   useEffect(() => {
     setTitles((ts) => (
-      {
-        ...ts,
-        owner: `${name} Owner`,
-        address: `${name} Address`,
-      }
+      { ...ts, address: name ? `${name}'s Address` : null }
     ))
     setAddrs((as) => (
-      { ...as, owner: undefined, address: undefined }
+      { ...as, address: undefined }
     ))
   }, [name])
 
@@ -110,16 +108,7 @@ export default () => {
       if: () => !MetamaskOnboarding.isMetaMaskInstalled(),
     },
     {
-      name: 'Stop Onboarding',
-      func: () => { try {
-        onboarding.stopOnboarding()
-      } catch(err) {
-        console.warn(err)
-      } },
-      if: () => !MetamaskOnboarding.isMetaMaskInstalled(),
-    },
-    {
-      name: 'Connect To Ethereum Wallet',
+      name: 'Connect Ethereum Wallet',
       func: async () => {
         const log = logger('color: purple')
         log('Enabling Inpage Provider')
@@ -149,47 +138,58 @@ export default () => {
             default: return `unknown (id:${chainId})`
           }
         })()
-        log('Setting addrs.net', net)
+        log('Setting Network Name', net)
         updateAddr({ net })
 
-        if(!addrs.self) throw new Error('Wallet Address Not Set')
-        const revAddr = (
+        if(!addrs.self) {
+          throw new Error('Wallet Address Not Set')
+        }
+        const reverse = (
           `${addrs.self.substr(2)}.addr.reverse`
         )
-        log('Adding Reverse Address', revAddr)
-        updateAddr({ rev: revAddr })
+        log('Adding Reverse Address', reverse)
+        updateAddr({ reverse })
 
-        log('Looking Up addr.reverse Owner')
-        const revRegistrar = (
+        const registrar = (
           await web3.eth.ens.getOwner('addr.reverse')
         )
-        log('revReg', revRegistrar)
-        if(!revRegistrar) {
-          throw new Error("Couldn't resolve reverse registrar.")
+        log('Reverse Registrar', registrar)
+        if(!registrar || /^0x0+$/.test(registrar)) {
+          throw new Error("Couldn't Resolve Reverse Registrar")
         }
-        log('revReg', revRegistrar)
-        updateAddr({ revRegistrar })
+        updateAddr({ registrar })
 
-        const revOwner = await web3.eth.ens.getOwner(revAddr)
-        updateAddr({ revOwner })
-
-        const resolver = await web3.eth.ens.getResolver(name)
-        if(/^0x0+$/.test(resolver.options.address)) {
-          updateAddr({ address: null, owner: null })
-        } else {
+        try {
+          if(!name) {
+            throw new Error('Name Not Set')
+          }
           const address = await web3.eth.ens.getAddress(name)
           updateAddr({
             address,
             owner: await web3.eth.ens.getOwner(address),
           })
+        } catch(err) {
+          if(
+            err.message.includes(
+              'does not implement requested method'
+            )
+            || err.message.includes(
+              'Name Not Set'
+            )
+          ) {
+            updateAddr({ address: null, owner: null })
+          } else {
+            throw err
+          }
         }
       },
       if: () => (
         !!addrs.self
         && (
           !addrs.net
+          || !addrs.reverse
+          || !addrs.registrar
           || addrs.address === undefined
-          || addrs.owner === undefined
         )
       ),
     },
@@ -198,119 +198,83 @@ export default () => {
       func: async () => {
         const log = logger('color: lightgray; background-color: black')
 
-        if(!addrs.revRegistrar) {
+        if(!addrs.registrar) {
           throw new Error('Reverse Registrar Address Not Set')
         }
-        const revRegistrar = new web3.eth.Contract(
-          revRegistrarABI as AbiItem[], addrs.revRegistrar
+        const registrar = new web3.eth.Contract(
+          registrarABI as AbiItem[], addrs.registrar
         )
-        log('Reverse Registrar', revRegistrar.options.address)
-        updateTract({ revRegistrar })
+        log('Reverse Registrar', registrar.options.address)
+        updateTract({ registrar })
 
-        const defaultResolver = await (
-          revRegistrar.methods.defaultResolver().call()
-        )
-        updateAddr({ defaultResolver })
+        if(name) {
+          const resolver = await web3.eth.ens.getResolver(name)
+          updateTract({ resolver })
+        }
 
-        if(!addrs.rev) {
+        if(!addrs.reverse) {
           throw new Error('Reverse Address Is Not Set')
         }
-        const revResolver = await (
-          web3.eth.ens.getResolver(addrs.rev)
+        const reverseResolver = await (
+          web3.eth.ens.getResolver(addrs.reverse)
         )
-        updateTract({ revResolver })
-        const resolver = revResolver.options.address
-        updateAddr({ resolver })
+        updateTract({ reverseResolver })
 
-        if(/^0x0+$/.test(resolver)) {
-          updateAddr({ revName: null })
+        const address = reverseResolver.options.address
+        updateAddr({ resolver: address })
+
+        if(/^0x0+$/.test(address)) {
+          updateAddr({ name: null })
         } else {
           const node = await (
-            revRegistrar.methods.node(addrs.self).call()
+            registrar.methods.node(addrs.self).call()
           )
-          const revName = (
-            await revResolver.methods.name(node).call()
+          const resolved = (
+            (await reverseResolver.methods.name(node).call())
+            ?? null
           )
-          updateAddr({ revName: revName ?? null })
+          updateAddr({ name: resolved })
+          if(!name) {
+            setName(resolved)
+          }
         }
       },
       if: () => (
-        !!addrs.revRegistrar
-        && (
-          !tracts.revRegistrar
-          || !tracts.revResolver
-        )
+        !!addrs.reverse
+        && addrs.address !== undefined
+        && !addrs.name
+        && !tracts.resolver
+        && !tracts.registrar
+        && !tracts.reverseResolver
       ),
     },
     {
-      name: 'Claim the Reverse Address',
+      name: name ? (
+        `Set ${name} As Reverse`
+      ) : (
+        'Enter A Name To Use As Reverse'
+      ),
       func: async () => {
-        if(addrs.revOwner === addrs.self) {
-          return alert(
-            `This account has already claimed its reverse address. (${
-              addrs.self
-            })`
-          )
-        }
-        if(!tracts.revRegistrar) {
-          throw new Error('Reverse Registrar Contract Not Set')
-        }
-        await (
-          tracts.revRegistrar
-          .methods.claim(addrs.self)
-          .send({ from: addrs.self })
-          .on('confirmation', () => {
-            updateAddr({ revOwner: null })
-            updateTract({ revResolver: null })
-          })
-        )
-      },
-      if: () => (
-        /^0x0+$/.test(addrs.revOwner ?? '')
-        && !!tracts.revRegistrar
-        && !addrs.revOwner?.localeCompare(
-          addrs.self ?? '', 'en', { sensitivity: 'base' }
-        )
-      )
-    },
-    {
-      name: 'Link Reverse Name',
-      func: async () => {
-        if(addrs.revName === name) {
+        if(addrs.name === name) {
           return alert(`Reverse Already Set To: ${name}`)
         }
         if(
-          !addrs.revName
-          || window.confirm(`Overwrite ${addrs.revName}?`)
+          !addrs.name
+          || window.confirm(`Overwrite ${addrs.name}?`)
         ) {
-          if(!tracts.revRegistrar) {
-            throw new Error('Reverse Registrar Not Set')
+          if(!tracts.registrar) {
+            throw new Error('Reverse Registrar Contract Not Set')
           }
           await (
-            tracts.revRegistrar.methods
+            tracts.registrar.methods
             .setName(name)
             .send({ from: addrs.self })
           )
-
-          if(!tracts.revResolver) {
-            throw new Error('Reverse Resolver Not Set')
-          }
-          const node = await (
-            tracts.revRegistrar.methods
-            .node(addrs.self)
-            .call()
-          )
-          const revName = await (
-            tracts.revResolver.methods.name(node).call()
-          )
-          updateAddr({ revName })
+          updateTract({ resolver: undefined })
+          updateAddr({ name: undefined })
         }
       },
-      if: () => (
-        !/^0x0+$/.test(addrs.revOwner ?? '')
-        && !!tracts.revResolver
-        && !!tracts.revRegistrar
-      )
+      if: () => (!!tracts.registrar && addrs.address !== undefined)
     }
   ]
 
@@ -318,27 +282,36 @@ export default () => {
     <Container maxW="100%">
       <Stack>
         <Flex justify="center" justifyItems="center">
-          <Text m={0} mr={2} alignSelf="center">ENS Name For Reverse Record:</Text>
+          <Text m={0} mr={2} alignSelf="center">
+            ENS Name For Reverse Record:
+          </Text>
           <Input
-            w="auto"
-            textAlign="center"
-            value={name}
-            onChange={evt => setName(evt.target.value)}
+            w="auto" textAlign="center"
+            placeholder="Exe: sample.ens.eth"
+            value={name ?? ''}
+            onChange={(evt) => {
+              setName(evt.target.value)
+              updateAddr({ address: undefined })
+              updateTract({ resolver: undefined })
+            }}
           />
         </Flex>
         <Grid templateColumns="auto 1fr" alignItems="center">
           {Object.entries(titles).map(([key, title], i) => {
             const { onCopy } = useClipboard(addrs[key] ?? '')
+            if(!title) return null
             return (
-              <Box key={i} display="contents" sx={{ '&:hover > *': { bg: '#FBFF0522' } }}>
-                <Text m={0} textAlign="right" pr={5} minW="12em">{title}:</Text>
-                <Text m={0} textOverflow="clip" title={addrs[key]}>
-                  <code>
-                    {addrs[key] === null ? <em>Unset</em> : addrs[key]}
-                  </code>
+              <Box
+                key={i} display="contents"
+                sx={{ '&:hover > *': { bg: '#FBFF0522' } }}
+              >
+                <Text m={0} textAlign="right" pr={5} minW="12em">
+                  {title}:
+                </Text>
+                <Text m={0} textOverflow="clip" whiteSpace="nowrap" title={addrs[key]}>
                   {addrs[key] && (
                     <Button
-                      title="Copy"
+                      title="Copy" mr={2} size="xs"
                       onClick={() => {
                         onCopy()
                         toast({
@@ -346,12 +319,17 @@ export default () => {
                           duration: 1500,
                         })
                       }}
-                      ml={3}
-                      size="xs"
                     >
                       <CopyIcon/>
                     </Button>
                   )}
+                  <code>
+                    {addrs[key] === null ? (
+                      <em>Unset</em>
+                    ) : (
+                      addrs[key]
+                    )}
+                  </code>
                 </Text>
               </Box>
             )
