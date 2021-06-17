@@ -140,7 +140,7 @@ export default () => {
       if: () => (!!ethereum && !addrs.self),
     },
     {
-      name: 'Load Addresses',
+      name: 'Load Contracts',
       func: async () => {
         const log = logger('color: orange; background-color: purple')
 
@@ -184,7 +184,7 @@ export default () => {
           const address = await web3.eth.ens.getAddress(name)
           updateAddr({
             address,
-            owner: await web3.eth.ens.getOwner(address),
+            owner: await web3.eth.ens.getOwner(reverse),
           })
         } catch(err) {
           if(
@@ -200,34 +200,21 @@ export default () => {
             throw err
           }
         }
-      },
-      if: () => (
-        !!addrs.self
-        && [
-          addrs.net, addrs.reverse, addrs.registrar,
-          addrs.address, addrs.owner,
-        ].some(addr => addr === undefined)
-      ),
-    },
-    {
-      name: 'Load Contracts',
-      func: async () => {
-        const log = logger('color: lightgray; background-color: black')
 
-        if(!addrs.registrar) {
+        if(!registrar) {
           throw new Error('Reverse Registrar Address Not Set')
         }
-        const registrar = new web3.eth.Contract(
-          registrarABI as AbiItem[], addrs.registrar
+        const registrarContract = new web3.eth.Contract(
+          registrarABI as AbiItem[], registrar
         )
-        log('Reverse Registrar', registrar.options.address)
-        updateTract({ registrar })
+        log('Reverse Registrar', registrarContract.options.address)
+        updateTract({ registrar: registrarContract })
 
-        if(!addrs.reverse) {
+        if(!reverse) {
           throw new Error('Reverse Address Is Not Set')
         }
         const reverseResolver = await (
-          web3.eth.ens.getResolver(addrs.reverse)
+          web3.eth.ens.getResolver(reverse)
         )
         updateTract({ reverseResolver })
 
@@ -240,7 +227,7 @@ export default () => {
           updateAddr({ name: null })
         } else {
           const node = await (
-            registrar.methods.node(addrs.self).call()
+            registrarContract.methods.node(addrs.self).call()
           )
           const resolved = (
             (await reverseResolver.methods.name(node).call())
@@ -267,11 +254,10 @@ export default () => {
         }
       },
       if: () => (
-        ![
+        !!addrs.self
+        && [
           addrs.net, addrs.reverse, addrs.registrar,
           addrs.address, addrs.owner,
-        ].some(addr => addr === undefined)
-        && [
           addrs.name, tracts.resolver,
           tracts.registrar, tracts.reverseResolver,
         ].some(tract => tract === undefined)
