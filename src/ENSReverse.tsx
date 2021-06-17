@@ -3,7 +3,7 @@ import Web3 from 'web3'
 import MetamaskOnboarding from '@metamask/onboarding'
 import {
   Stack, Input, Container, Flex, Button, Text, Box,
-  Grid, useClipboard, useToast, Spinner, Tooltip,
+  Grid, useClipboard, useToast, Spinner, Tooltip, useBreakpointValue, Placement,
 } from '@chakra-ui/react'
 import { AbiItem } from 'web3-utils'
 import { Contract } from 'web3-eth-contract'
@@ -79,6 +79,9 @@ export default () => {
   const [tracts, setTracts] = useState<Contracts>({})
   const [loading, setLoading] = useState(false)
   const toast = useToast()
+  const placement = (
+    useBreakpointValue<Placement>(['bottom', 'right'])
+  )
   const input = useRef<HTMLInputElement | null>(null)
 
   const updateAddr = (obj: object) => {
@@ -334,7 +337,10 @@ export default () => {
             }}
           />
         </Flex>
-        <Grid templateColumns="auto 1fr" alignItems="center">
+        <Grid
+          templateColumns={['auto', 'auto 1fr']}
+          alignItems="center" maxW="100vw"
+        >
           {Object.entries(titles).map(([key, title], i) => {
             const { onCopy } = useClipboard(addrs[key] ?? '')
             if(!title) return null
@@ -344,14 +350,21 @@ export default () => {
                 sx={{ '&:hover > *': { bg: '#FBFF0522' } }}
               >
                 <Tooltip
-                  hasArrow placement="right"
+                  hasArrow placement={placement}
                   label={tooltips[key]}
                 >
-                  <Text m={0} textAlign="right" pr={5} minW="12em">
+                  <Text
+                    textAlign={['left', 'right']}
+                    m={0} pr={5} minW="12em"
+                    userSelect="none"
+                  >
                     {title}:
                   </Text>
                 </Tooltip>
-                <Text m={0} textOverflow="clip" whiteSpace="nowrap" title={addrs[key]}>
+                <Text
+                  m={0} textOverflow="clip" whiteSpace="nowrap"
+                  title={addrs[key]} overflowX="hidden" ml={[5, 0]}
+                >
                   {addrs[key] && (
                     <Button
                       title="Copy" mr={2} size="xs"
