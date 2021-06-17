@@ -1,24 +1,32 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, Provider, useCallback } from 'react'
 import Web3 from 'web3'
-import MetamaskOnboarding from '@metamask/onboarding'
 import {
   Stack, Input, Container, Flex, Button, Text, Box,
-  Grid, useClipboard, useToast, Spinner, Tooltip, useBreakpointValue, Placement,
+  Grid, useClipboard, useToast, Spinner, Tooltip,
+  useBreakpointValue, Placement,
 } from '@chakra-ui/react'
 import { AbiItem } from 'web3-utils'
 import { Contract } from 'web3-eth-contract'
 import { abi as registrarABI } from '@ensdomains/ens-contracts/artifacts/contracts/registry/ReverseRegistrar.sol/ReverseRegistrar.json'
 import { useParams } from 'react-router-dom'
 import { CopyIcon } from '@chakra-ui/icons'
-import { useRef } from 'react'
+import Web3Modal from 'web3modal'
+import WalletConnectProvider from '@walletconnect/web3-provider'
+import { ReactElement } from 'react'
 
-declare global {
-  interface Window {
-    ethereum: any
-  }
+const providerOptions = {
+  walletconnect: {
+    package: WalletConnectProvider,
+    options: {
+      infuraId: process.env.REACT_APP_INFURA_ID,
+    },
+  },
 }
-const { ethereum } = window
-const web3 = new Web3(ethereum)
+
+const web3Modal = new Web3Modal({
+  cacheProvider: true,
+  providerOptions,
+})
 
 const logger = (css: string) => (
   (...args: unknown[]) => {
@@ -62,9 +70,9 @@ const tooltips: Record<string, string> = {
 
 // eslint-disable-next-line import/no-anonymous-default-export
 export default () => {
-  const onboarding = new MetamaskOnboarding()
   const params = useParams<Parameters>()
   const [name, setName] = useState(params.name)
+  const [web3, setWeb3] = useState<Web3>()
   const [titles, setTitles] = useState({
     self: 'Your Address',
     net: 'Current Network',
@@ -95,173 +103,162 @@ export default () => {
     setAddrs({})
     setTracts({})
   }
+
   useEffect(() => {
-    ethereum?.on('chainChanged', reset)
-    return () => ethereum?.off('chainChanged', reset)
-  }, [])
+    (async () => {
+      setTitles((ts) => (
+        { ...ts, address: name ? `${name}'s Address` : null }
+      ))
+      setAddrs((as) => (
+        { ...as, address: undefined }
+      ))
+
+      if(!web3) return null
+
+      try {
+        if(!name) throw new Error('Name Not Set')
+        const address = await web3.eth.ens.getAddress(name)
+        updateAddr({ address })
+      } catch(err) {
+        updateAddr({ address: null })
+      }
+    })()
+  }, [name, web3])
+
+  const setProvider = useCallback(
+    async (provider: any) => {
+      const log = logger('color: purple')
+      const web3 = new Web3(provider)
+      setWeb3(web3)
+
+      const addresses = await web3.eth.getAccounts()
+      const addr = addresses[0]
+      log('Wallet Address', addr)
+      updateAddr({ self: addr })
+
+      if(provider.on) {
+        provider.on('close', reset)
+        provider.on('networkChanged', reset)
+        provider.on('chainChanged', reset)
+
+        const resetAccount = (accts: string[]) => {
+          reset()
+          updateAddr({ self: accts[0] })
+        }
+        provider.on('accountsChanged', resetAccount)
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
-    const resetAndSet = (accts: string[]) => {
-      reset()
-      updateAddr({ self: accts[0] })
+    if(web3Modal.cachedProvider) {
+      web3Modal.connect().then(setProvider)
     }
-    ethereum?.on('accountsChanged', resetAndSet)
-    return () => ethereum?.off(
-      'accountsChanged', resetAndSet
-    )
-  }, [])
+  }, [setProvider])
 
   useEffect(() => {
-    setTitles((ts) => (
-      { ...ts, address: name ? `${name}'s Address` : null }
-    ))
-    setAddrs((as) => (
-      { ...as, address: undefined }
-    ))
-  }, [name])
+    (async () => {
+      if(!web3 || !addrs.self) return null
 
-  const handlers = [
-    {
-      name: 'Install MetaMask',
-      func: () => onboarding.startOnboarding(),
-      if: () => !MetamaskOnboarding.isMetaMaskInstalled(),
-    },
-    {
-      name: 'Connect Ethereum Wallet',
-      func: async () => {
-        const log = logger('color: purple')
-        log('Enabling Inpage Provider')
-        const addresses = await (
-          ethereum?.request({ method: 'eth_requestAccounts' })
-        )
-        const addr = addresses?.[0]
-        log('Wallet Address', addr)
-        updateAddr({ self: addr })
-      },
-      if: () => (!!ethereum && !addrs.self),
-    },
-    {
-      name: 'Load Contracts',
-      func: async () => {
-        const log = logger('color: orange; background-color: purple')
-
-        const net = await (async () => {
-          const chainId = await web3.eth.getChainId()
-          switch(chainId) {
-            case 1: return 'mainnet'
-            case 2: return 'Morden'
-            case 3: return 'Ropsten'
-            case 4: return 'Rinkeby'
-            case 42: return 'Kovan'
-            case 100: return 'xDAI'
-            default: return `unknown (id:${chainId})`
-          }
-        })()
-        log('Setting Network Name', net)
-        updateAddr({ net })
-
-        if(!addrs.self) {
-          throw new Error('Wallet Address Not Set')
+      const log = logger('color: orange; background-color: purple')
+      const net = await (async () => {
+        const chainId = await web3.eth.getChainId()
+        switch(chainId) {
+          case 1: return 'mainnet'
+          case 2: return 'Morden'
+          case 3: return 'Ropsten'
+          case 4: return 'Rinkeby'
+          case 42: return 'Kovan'
+          case 100: return 'xDAI'
+          default: return `unknown (id:${chainId})`
         }
-        const reverse = (
-          `${addrs.self.substr(2)}.addr.reverse`
-        )
-        log('Adding Reverse Address', reverse)
-        updateAddr({ reverse })
+      })()
+      log('Setting Network Name', net)
+      updateAddr({ net })
 
-        const registrar = (
-          await web3.eth.ens.getOwner('addr.reverse')
-        )
-        log('Reverse Registrar', registrar)
-        if(!registrar || /^0x0+$/.test(registrar)) {
-          throw new Error("Couldn't Resolve Reverse Registrar")
-        }
-        updateAddr({ registrar })
-
-        try {
-          if(!name) {
-            throw new Error('Name Not Set')
-          }
-          const address = await web3.eth.ens.getAddress(name)
-          updateAddr({
-            address,
-            owner: await web3.eth.ens.getOwner(reverse),
-          })
-        } catch(err) {
-          if(
-            err.message.includes(
-              'does not implement requested method'
-            )
-            || err.message.includes(
-              'Name Not Set'
-            )
-          ) {
-            updateAddr({ address: null, owner: null })
-          } else {
-            throw err
-          }
-        }
-
-        if(!registrar) {
-          throw new Error('Reverse Registrar Address Not Set')
-        }
-        const registrarContract = new web3.eth.Contract(
+      let registrar: ReactElement | string = (
+        await web3.eth.ens.getOwner('addr.reverse')
+      )
+      log('Reverse Registrar', registrar)
+      let registrarContract
+      if(!registrar || /^0x0+$/.test(registrar)) {
+        registrar = <em>Error: Couldn't get reverse registrar.</em>
+      } else {
+        registrarContract = new web3.eth.Contract(
           registrarABI as AbiItem[], registrar
         )
         log('Reverse Registrar', registrarContract.options.address)
         updateTract({ registrar: registrarContract })
+      }
+      updateAddr({ registrar })
 
-        if(!reverse) {
-          throw new Error('Reverse Address Is Not Set')
-        }
-        const reverseResolver = await (
+      const reverse: string = (
+        `${addrs.self.substr(2)}.addr.reverse`
+      )
+      log('Adding Reverse Address', reverse)
+      updateAddr({ reverse })
+
+      let reverseResolver, address
+      if(reverse) {
+        updateAddr({
+          owner: await web3.eth.ens.getOwner(reverse),
+        })
+
+        reverseResolver = await (
           web3.eth.ens.getResolver(reverse)
         )
         updateTract({ reverseResolver })
 
-        const address = reverseResolver.options.address
+        address = reverseResolver.options.address
         updateAddr({ resolver: address })
+      }
 
-        let ensEntry = name
+      let ensEntry = name
 
-        if(/^0x0+$/.test(address)) {
-          updateAddr({ name: null })
-        } else {
-          const node = await (
-            registrarContract.methods.node(addrs.self).call()
-          )
-          const resolved = (
-            (await reverseResolver.methods.name(node).call())
-            ?? null
-          )
-          updateAddr({ name: resolved })
-          if(!name) {
-            ensEntry = resolved
-            setName(resolved)
-            toast({
-              title: 'Set Name',
-              description: (
-                `Defaulting name to current reverse record: "${resolved}".`
-              ),
-              duration: 3000,
-            })
-            input.current?.focus()
-          }
+      if(!address || /^0x0+$/.test(address)) {
+        updateAddr({ name: null })
+      } else if(registrarContract && reverseResolver) {
+        const node = await (
+          registrarContract.methods.node(addrs.self).call()
+        )
+        const resolved = (
+          (await reverseResolver.methods.name(node).call())
+          ?? null
+        )
+        updateAddr({ name: resolved })
+        if(!name) {
+          ensEntry = resolved
+          setName(resolved)
+          toast({
+            title: 'Set Name',
+            description: (
+              `Defaulting name to current reverse record: "${resolved}".`
+            ),
+            duration: 3000,
+          })
+          input.current?.focus()
         }
+      }
 
-        if(ensEntry) {
+      if(ensEntry) {
+        try {
           const resolver = await web3.eth.ens.getResolver(ensEntry)
           updateTract({ resolver })
+        } catch(err) {
+          alert(err.message)
         }
+      }
+    })()
+  }, [web3, addrs.self, name, toast])
+
+  const handlers = [
+    {
+      name: 'Connect Ethereum Wallet',
+      func: async () => {
+        setProvider(await web3Modal.connect())
       },
-      if: () => (
-        !!addrs.self
-        && [
-          addrs.net, addrs.reverse, addrs.registrar,
-          addrs.address, addrs.owner,
-          addrs.name, tracts.resolver,
-          tracts.registrar, tracts.reverseResolver,
-        ].some(tract => tract === undefined)
-      ),
+      if: () => (!addrs.self),
     },
     {
       name: name ? (
@@ -325,7 +322,7 @@ export default () => {
         </Flex>
         <Grid
           templateColumns={['auto', 'auto 1fr']}
-          alignItems="center" maxW="100vw"
+          alignItems="center" maxW="100vw" mt={3}
         >
           {Object.entries(titles).map(([key, title], i) => {
             const { onCopy } = useClipboard(addrs[key] ?? '')
@@ -378,7 +375,7 @@ export default () => {
           })}
         </Grid>
       </Stack>
-      <Stack>
+      <Stack mt={3}>
         {handlers.map((h, i) => (
           <Button
             key={i}
