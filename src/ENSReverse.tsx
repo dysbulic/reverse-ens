@@ -73,10 +73,13 @@ export default () => {
     setAddrs({})
     setTracts({})
   }
-  ethereum.on('chainChanged', reset)
-  ethereum.on('accountsChanged', (accts: string[]) => (
-    updateAddr({ self: accts[0] })
-  ))
+  ethereum?.on('chainChanged', reset)
+  ethereum?.on('accountsChanged',
+    (accts: string[]) => {
+      reset()
+      updateAddr({ self: accts[0] })
+    }
+  )
 
   useEffect(() => {
     setTitles((ts) => (
@@ -107,47 +110,55 @@ export default () => {
       if: () => !MetamaskOnboarding.isMetaMaskInstalled(),
     },
     {
-      name: 'Enable Ethereum on this Site',
+      name: 'Connect To Ethereum Wallet',
       func: async () => {
         const log = logger('color: purple')
         log('Enabling Inpage Provider')
         const addresses = await (
-          window.ethereum.request({ method: 'eth_requestAccounts' })
+          ethereum?.request({ method: 'eth_requestAccounts' })
         )
-        const addr = addresses[0]
+        const addr = addresses?.[0]
         log('Wallet Address', addr)
         updateAddr({ self: addr })
       },
-      if: () => (!addrs.self),
+      if: () => (!!ethereum && !addrs.self),
     },
     {
       name: 'Load Addresses',
       func: async () => {
         const log = logger('color: orange; background-color: purple')
 
-        const net = (() => {
-          switch(parseInt(ethereum.networkVersion)) {
+        const net = await (async () => {
+          const chainId = await web3.eth.getChainId()
+          switch(chainId) {
             case 1: return 'mainnet'
             case 2: return 'Morden'
             case 3: return 'Ropsten'
             case 4: return 'Rinkeby'
             case 42: return 'Kovan'
             case 100: return 'xDAI'
-            default: return `unknown (id:${ethereum.networkVersion})`
+            default: return `unknown (id:${chainId})`
           }
         })()
         log('Setting addrs.net', net)
         updateAddr({ net })
 
+        if(!addrs.self) throw new Error('Wallet Address Not Set')
         const revAddr = (
-          `${(addrs.self ?? '').substr(2)}.addr.reverse`
+          `${addrs.self.substr(2)}.addr.reverse`
         )
         log('Adding Reverse Address', revAddr)
         updateAddr({ rev: revAddr })
 
+        log('Looking Up addr.reverse Owner')
         const revRegistrar = (
           await web3.eth.ens.getOwner('addr.reverse')
         )
+        log('revReg', revRegistrar)
+        if(!revRegistrar) {
+          throw new Error("Couldn't resolve reverse registrar.")
+        }
+        log('revReg', revRegistrar)
         updateAddr({ revRegistrar })
 
         const revOwner = await web3.eth.ens.getOwner(revAddr)
@@ -155,26 +166,32 @@ export default () => {
 
         const resolver = await web3.eth.ens.getResolver(name)
         if(/^0x0+$/.test(resolver.options.address)) {
-          const unset = <em>Unset</em>
-          updateAddr({ address: unset })
-          updateAddr({ owner: unset })
+          updateAddr({ address: null, owner: null })
         } else {
           const address = await web3.eth.ens.getAddress(name)
-          updateAddr({ address })
           updateAddr({
-            owner: await web3.eth.ens.getOwner(address)
+            address,
+            owner: await web3.eth.ens.getOwner(address),
           })
         }
       },
-      if: () => (!!addrs.self && (
-        !addrs.net || !addrs.address || !addrs.owner
-      )),
+      if: () => (
+        !!addrs.self
+        && (
+          !addrs.net
+          || addrs.address === undefined
+          || addrs.owner === undefined
+        )
+      ),
     },
     {
       name: 'Load Contracts',
       func: async () => {
         const log = logger('color: lightgray; background-color: black')
 
+        if(!addrs.revRegistrar) {
+          throw new Error('Reverse Registrar Address Not Set')
+        }
         const revRegistrar = new web3.eth.Contract(
           revRegistrarABI as AbiItem[], addrs.revRegistrar
         )
@@ -186,47 +203,60 @@ export default () => {
         )
         updateAddr({ defaultResolver })
 
-        if(!addrs.rev) throw new Error('Reverse Address Is Not Set')
+        if(!addrs.rev) {
+          throw new Error('Reverse Address Is Not Set')
+        }
         const revResolver = await (
           web3.eth.ens.getResolver(addrs.rev)
         )
         updateTract({ revResolver })
-        updateAddr({ resolver: revResolver.options.address })
+        const resolver = revResolver.options.address
+        updateAddr({ resolver })
 
-        const node = await (
-          revRegistrar.methods.node(addrs.self).call()
-        )
-        const revName = (
-          (await revResolver.methods.name(node).call())
-          || <em>Unset</em>
-        )
-        updateAddr({ revName })
-  
+        if(/^0x0+$/.test(resolver)) {
+          updateAddr({ revName: null })
+        } else {
+          const node = await (
+            revRegistrar.methods.node(addrs.self).call()
+          )
+          const revName = (
+            await revResolver.methods.name(node).call()
+          )
+          updateAddr({ revName })
+        }
       },
-      if: () => (!!addrs.net && !tracts.revRegistrar),
+      if: () => (!!addrs.revRegistrar && !tracts.revRegistrar),
     },
     {
       name: 'Claim the Reverse Address',
       func: async () => {
-        if(addrs.revOwner !== addrs.self) {
-          await (
-            tracts.revRegistrar
-            ?.methods.claim(addrs.self)
-            .send({ from: addrs.self })
+        if(addrs.revOwner === addrs.self) {
+          return alert(
+            `This account has already claimed its reverse address. (${
+              addrs.self
+            })`
           )
-          if(!addrs.rev) throw new Error('Missing Reverse Address')
-          const revOwner = await web3.eth.ens.getOwner(addrs.rev)
-          updateAddr({ revOwner })
         }
+        if(!tracts.revRegistrar) {
+          throw new Error('Reverse Registrar Contract Not Set')
+        }
+        await (
+          tracts.revRegistrar
+          .methods.claim(addrs.self)
+          .send({ from: addrs.self })
+        )
+        if(!addrs.rev) throw new Error('Missing Reverse Address')
+        const revOwner = await web3.eth.ens.getOwner(addrs.rev)
+        updateAddr({ revOwner })
       },
       if: () => (
         /^0x0+$/.test(addrs.revOwner ?? '') && !!tracts.revRegistrar
       )
     },
     {
-      name: 'Set Resolver and Link Reverse Name',
+      name: 'Link Reverse Name',
       func: async () => {
-        if(addrs.revLook === name) {
+        if(addrs.revName === name) {
           return alert(`Reverse Already Set To: ${name}`)
         }
         if(
@@ -236,7 +266,7 @@ export default () => {
           if(!tracts.revRegistrar) {
             throw new Error('Reverse Registrar Not Set')
           }
-          const node = await (
+          await (
             tracts.revRegistrar.methods
             .setName(name)
             .send({ from: addrs.self })
@@ -245,6 +275,11 @@ export default () => {
           if(!tracts.revResolver) {
             throw new Error('Reverse Resolver Not Set')
           }
+          const node = await (
+            tracts.revRegistrar.methods
+            .node(addrs.self)
+            .call()
+          )
           const revName = await (
             tracts.revResolver.methods.name(node).call()
           )
@@ -271,9 +306,11 @@ export default () => {
         </Flex>
         <Grid templateColumns="auto 1fr" alignItems="center">
           {Object.entries(titles).map(([key, title], i) => (
-            <Box key={i} display="contents" _hover={{ bg: 'yellow' }}>
+            <Box key={i} display="contents" sx={{ '&:hover > *': { bg: 'yellow' } }}>
               <Text m={0} textAlign="right" pr={5} minW="12em">{title}:</Text>
-              <Text m={0} textOverflow="clip" title={addrs[key]}><code>{addrs[key]}</code></Text>
+              <Text m={0} textOverflow="clip" title={addrs[key]}><code>
+                {addrs[key] === null ? <em>Unset</em> : addrs[key]}
+              </code></Text>
             </Box>
           ))}
         </Grid>
@@ -281,7 +318,15 @@ export default () => {
       <Stack>
         {handlers.map((h, i) => (
           <Button
-            key={i} onClick={h.func}
+            key={i}
+            onClick={async () => {
+              try {
+                await h.func()
+              } catch(err) {
+                console.error(err)
+                alert(err.message)
+              }
+            }}
             disabled={h.if ? !h.if() : false}
             m={0} py={10} mt="0 ! important"
           >
