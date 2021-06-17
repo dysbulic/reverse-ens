@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Web3 from 'web3'
 import MetamaskOnboarding from '@metamask/onboarding'
 import {
-  Stack, Input, Container, Flex, Button, Text, Box, Grid,
+  Stack, Input, Container, Flex, Button, Text, Box, Grid, useClipboard, useToast,
 } from '@chakra-ui/react'
 import { AbiItem } from 'web3-utils'
 import { Contract } from 'web3-eth-contract'
 import { abi as revRegistrarABI } from '@ensdomains/ens-contracts/artifacts/contracts/registry/ReverseRegistrar.sol/ReverseRegistrar.json'
-import { useEffect } from 'react'
+import { useParams } from 'react-router-dom'
+import { CopyIcon } from '@chakra-ui/icons'
 
 declare global {
   interface Window {
@@ -44,10 +45,17 @@ interface Contracts {
   revRegistrar?: Contract
 }
 
+interface Parameters {
+  name?: string
+}
+
 // eslint-disable-next-line import/no-anonymous-default-export
 export default () => {
   const onboarding = new MetamaskOnboarding()
-  const [name, setName] = useState('subdomain.ensname.eth')
+  const params = useParams<Parameters>()
+  const [name, setName] = useState(
+    params.name || 'subdomain.ensname.eth'
+  )
   const [titles, setTitles] = useState({
     self: 'Your Address',
     net: 'Current Network',
@@ -61,6 +69,7 @@ export default () => {
   })
   const [addrs, setAddrs] = useState<Addresses>({})
   const [tracts, setTracts] = useState<Contracts>({})
+  const toast = useToast()
 
   const updateAddr = (obj: object) => {
     setAddrs(as => ({ ...as, ...obj }))
@@ -222,10 +231,16 @@ export default () => {
           const revName = (
             await revResolver.methods.name(node).call()
           )
-          updateAddr({ revName })
+          updateAddr({ revName: revName ?? null })
         }
       },
-      if: () => (!!addrs.revRegistrar && !tracts.revRegistrar),
+      if: () => (
+        !!addrs.revRegistrar
+        && (
+          !tracts.revRegistrar
+          || !tracts.revResolver
+        )
+      ),
     },
     {
       name: 'Claim the Reverse Address',
@@ -244,13 +259,18 @@ export default () => {
           tracts.revRegistrar
           .methods.claim(addrs.self)
           .send({ from: addrs.self })
+          .on('confirmation', () => {
+            updateAddr({ revOwner: null })
+            updateTract({ revResolver: null })
+          })
         )
-        if(!addrs.rev) throw new Error('Missing Reverse Address')
-        const revOwner = await web3.eth.ens.getOwner(addrs.rev)
-        updateAddr({ revOwner })
       },
       if: () => (
-        /^0x0+$/.test(addrs.revOwner ?? '') && !!tracts.revRegistrar
+        /^0x0+$/.test(addrs.revOwner ?? '')
+        && !!tracts.revRegistrar
+        && !addrs.revOwner?.localeCompare(
+          addrs.self ?? '', 'en', { sensitivity: 'base' }
+        )
       )
     },
     {
@@ -295,24 +315,47 @@ export default () => {
   ]
 
   return (
-    <Container>
+    <Container maxW="100%">
       <Stack>
-        <Flex justify="center">
+        <Flex justify="center" justifyItems="center">
+          <Text m={0} mr={2} alignSelf="center">ENS Name For Reverse Record:</Text>
           <Input
-            textAlign="right"
+            w="auto"
+            textAlign="center"
             value={name}
             onChange={evt => setName(evt.target.value)}
           />
         </Flex>
         <Grid templateColumns="auto 1fr" alignItems="center">
-          {Object.entries(titles).map(([key, title], i) => (
-            <Box key={i} display="contents" sx={{ '&:hover > *': { bg: 'yellow' } }}>
-              <Text m={0} textAlign="right" pr={5} minW="12em">{title}:</Text>
-              <Text m={0} textOverflow="clip" title={addrs[key]}><code>
-                {addrs[key] === null ? <em>Unset</em> : addrs[key]}
-              </code></Text>
-            </Box>
-          ))}
+          {Object.entries(titles).map(([key, title], i) => {
+            const { onCopy } = useClipboard(addrs[key] ?? '')
+            return (
+              <Box key={i} display="contents" sx={{ '&:hover > *': { bg: '#FBFF0522' } }}>
+                <Text m={0} textAlign="right" pr={5} minW="12em">{title}:</Text>
+                <Text m={0} textOverflow="clip" title={addrs[key]}>
+                  <code>
+                    {addrs[key] === null ? <em>Unset</em> : addrs[key]}
+                  </code>
+                  {addrs[key] && (
+                    <Button
+                      title="Copy"
+                      onClick={() => {
+                        onCopy()
+                        toast({
+                          title: 'Value Copied',
+                          duration: 1500,
+                        })
+                      }}
+                      ml={3}
+                      size="xs"
+                    >
+                      <CopyIcon/>
+                    </Button>
+                  )}
+                </Text>
+              </Box>
+            )
+          })}
         </Grid>
       </Stack>
       <Stack>
@@ -328,7 +371,7 @@ export default () => {
               }
             }}
             disabled={h.if ? !h.if() : false}
-            m={0} py={10} mt="0 ! important"
+            m={0} mt="0 ! important"
           >
             {h.name}
           </Button>
