@@ -2,13 +2,15 @@ import { useState, useEffect } from 'react'
 import Web3 from 'web3'
 import MetamaskOnboarding from '@metamask/onboarding'
 import {
-  Stack, Input, Container, Flex, Button, Text, Box, Grid, useClipboard, useToast,
+  Stack, Input, Container, Flex, Button, Text, Box,
+  Grid, useClipboard, useToast, Spinner,
 } from '@chakra-ui/react'
 import { AbiItem } from 'web3-utils'
 import { Contract } from 'web3-eth-contract'
 import { abi as registrarABI } from '@ensdomains/ens-contracts/artifacts/contracts/registry/ReverseRegistrar.sol/ReverseRegistrar.json'
 import { useParams } from 'react-router-dom'
 import { CopyIcon } from '@chakra-ui/icons'
+import { useRef } from 'react'
 
 declare global {
   interface Window {
@@ -64,7 +66,9 @@ export default () => {
   })
   const [addrs, setAddrs] = useState<Addresses>({})
   const [tracts, setTracts] = useState<Contracts>({})
+  const [loading, setLoading] = useState(false)
   const toast = useToast()
+  const input = useRef<HTMLInputElement | null>(null)
 
   const updateAddr = (obj: object) => {
     setAddrs(as => ({ ...as, ...obj }))
@@ -185,12 +189,10 @@ export default () => {
       },
       if: () => (
         !!addrs.self
-        && (
-          !addrs.net
-          || !addrs.reverse
-          || !addrs.registrar
-          || addrs.address === undefined
-        )
+        && [
+          addrs.net, addrs.reverse, addrs.registrar,
+          addrs.address, addrs.owner,
+        ].some(addr => addr === undefined)
       ),
     },
     {
@@ -207,11 +209,6 @@ export default () => {
         log('Reverse Registrar', registrar.options.address)
         updateTract({ registrar })
 
-        if(name) {
-          const resolver = await web3.eth.ens.getResolver(name)
-          updateTract({ resolver })
-        }
-
         if(!addrs.reverse) {
           throw new Error('Reverse Address Is Not Set')
         }
@@ -222,6 +219,8 @@ export default () => {
 
         const address = reverseResolver.options.address
         updateAddr({ resolver: address })
+
+        let ensEntry = name
 
         if(/^0x0+$/.test(address)) {
           updateAddr({ name: null })
@@ -235,17 +234,33 @@ export default () => {
           )
           updateAddr({ name: resolved })
           if(!name) {
+            ensEntry = resolved
             setName(resolved)
+            toast({
+              title: 'Set Name',
+              description: (
+                `Defaulting name to current reverse record: "${resolved}".`
+              ),
+              duration: 3000,
+            })
+            input.current?.focus()
           }
+        }
+
+        if(ensEntry) {
+          const resolver = await web3.eth.ens.getResolver(ensEntry)
+          updateTract({ resolver })
         }
       },
       if: () => (
-        !!addrs.reverse
-        && addrs.address !== undefined
-        && !addrs.name
-        && !tracts.resolver
-        && !tracts.registrar
-        && !tracts.reverseResolver
+        ![
+          addrs.net, addrs.reverse, addrs.registrar,
+          addrs.address, addrs.owner,
+        ].some(addr => addr === undefined)
+        && [
+          addrs.name, tracts.resolver,
+          tracts.registrar, tracts.reverseResolver,
+        ].some(tract => tract === undefined)
       ),
     },
     {
@@ -255,8 +270,11 @@ export default () => {
         'Enter A Name To Use As Reverse'
       ),
       func: async () => {
-        if(addrs.name === name) {
-          return alert(`Reverse Already Set To: ${name}`)
+        if(!name || addrs.name === name) {
+          if(name) {
+            alert(`Reverse Already Set To: ${name}`)
+          }
+          return input.current?.focus()
         }
         if(
           !addrs.name
@@ -265,16 +283,25 @@ export default () => {
           if(!tracts.registrar) {
             throw new Error('Reverse Registrar Contract Not Set')
           }
+          setLoading(true)
           await (
             tracts.registrar.methods
             .setName(name)
             .send({ from: addrs.self })
           )
           updateTract({ resolver: undefined })
-          updateAddr({ name: undefined })
+          updateAddr({ name: undefined, owner: undefined })
+          setLoading(false)
         }
       },
-      if: () => (!!tracts.registrar && addrs.address !== undefined)
+      if: () => (
+        ![
+          addrs.net, addrs.reverse, addrs.registrar,
+          addrs.address, addrs.owner,
+          addrs.name, tracts.resolver,
+          tracts.registrar, tracts.reverseResolver,
+        ].some(tract => tract === undefined)
+      )
     }
   ]
 
@@ -288,7 +315,7 @@ export default () => {
           <Input
             w="auto" textAlign="center"
             placeholder="Exe: sample.ens.eth"
-            value={name ?? ''}
+            value={name ?? ''} ref={input}
             onChange={(evt) => {
               setName(evt.target.value)
               updateAddr({ address: undefined })
@@ -346,11 +373,15 @@ export default () => {
               } catch(err) {
                 console.error(err)
                 alert(err.message)
+                setLoading(false)
               }
             }}
-            disabled={h.if ? !h.if() : false}
+            disabled={loading || (h.if ? !h.if() : false)}
             m={0} mt="0 ! important"
           >
+            {loading && (i + 1 === handlers.length) && (
+              <Spinner size="sm" mr={3}/>
+            )}
             {h.name}
           </Button>
         ))}
