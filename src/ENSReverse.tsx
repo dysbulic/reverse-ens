@@ -1,4 +1,6 @@
-import { useState, useEffect, useRef, Provider, useCallback } from 'react'
+import {
+  useState, useEffect, useRef, useCallback, FormEvent,
+} from 'react'
 import Web3 from 'web3'
 import {
   Stack, Input, Container, Flex, Button, Text, Box,
@@ -86,6 +88,7 @@ export default () => {
   const [addrs, setAddrs] = useState<Addresses>({})
   const [tracts, setTracts] = useState<Contracts>({})
   const [loading, setLoading] = useState(false)
+  const [once, setOnce] = useState(false)
   const toast = useToast()
   const placement = (
     useBreakpointValue<Placement>(['bottom', 'right'])
@@ -102,28 +105,31 @@ export default () => {
   const reset = () => {
     setAddrs({})
     setTracts({})
+    setOnce(false)
   }
 
+  const resolve = useCallback(async (name) => {
+    if(!web3) return null
+
+    try {
+      if(!name) throw new Error('Name Not Set')
+      const address = await web3.eth.ens.getAddress(name)
+      updateAddr({ address })
+    } catch(err) {
+      updateAddr({ address: null })
+    }
+  }, [web3])
+
   useEffect(() => {
-    (async () => {
-      setTitles((ts) => (
-        { ...ts, address: name ? `${name}'s Address` : null }
-      ))
-      setAddrs((as) => (
-        { ...as, address: undefined }
-      ))
+    setTitles((ts) => (
+      { ...ts, address: name ? `${name}'s Address` : null }
+    ))
+    setAddrs((as) => (
+      { ...as, address: undefined }
+    ))
 
-      if(!web3) return null
-
-      try {
-        if(!name) throw new Error('Name Not Set')
-        const address = await web3.eth.ens.getAddress(name)
-        updateAddr({ address })
-      } catch(err) {
-        updateAddr({ address: null })
-      }
-    })()
-  }, [name, web3])
+    resolve(name)
+  }, [name, resolve])
 
   const setProvider = useCallback(
     async (provider: any) => {
@@ -131,14 +137,9 @@ export default () => {
       const web3 = new Web3(provider)
       setWeb3(web3)
 
-      const addresses = await web3.eth.getAccounts()
-      const addr = addresses[0]
-      log('Wallet Address', addr)
-      updateAddr({ self: addr })
-
       if(provider.on) {
-        provider.on('close', reset)
-        provider.on('networkChanged', reset)
+        log('Listening to Provider')
+        provider.on('disconnect', reset)
         provider.on('chainChanged', reset)
 
         const resetAccount = (accts: string[]) => {
@@ -159,9 +160,16 @@ export default () => {
 
   useEffect(() => {
     (async () => {
-      if(!web3 || !addrs.self) return null
+      if(!web3 || once) return null
+
+      setOnce(true)
 
       const log = logger('color: orange; background-color: purple')
+      const addresses = await web3.eth.getAccounts()
+      const self = addresses[0]
+      log('Wallet Address', self)
+      updateAddr({ self })
+
       const net = await (async () => {
         const chainId = await web3.eth.getChainId()
         switch(chainId) {
@@ -176,6 +184,8 @@ export default () => {
       })()
       log('Setting Network Name', net)
       updateAddr({ net })
+
+      resolve(name)
 
       let registrar: ReactElement | string = (
         await web3.eth.ens.getOwner('addr.reverse')
@@ -194,7 +204,7 @@ export default () => {
       updateAddr({ registrar })
 
       const reverse: string = (
-        `${addrs.self.substr(2)}.addr.reverse`
+        `${self.substr(2)}.addr.reverse`
       )
       log('Adding Reverse Address', reverse)
       updateAddr({ reverse })
@@ -220,7 +230,7 @@ export default () => {
         updateAddr({ name: null })
       } else if(registrarContract && reverseResolver) {
         const node = await (
-          registrarContract.methods.node(addrs.self).call()
+          registrarContract.methods.node(self).call()
         )
         const resolved = (
           (await reverseResolver.methods.name(node).call())
@@ -250,14 +260,11 @@ export default () => {
         }
       }
     })()
-  }, [web3, addrs.self, name, toast])
+  }, [web3, once, name, toast])
 
   const handlers = [
     {
       name: 'Connect Ethereum Wallet',
-      func: async () => {
-        setProvider(await web3Modal.connect())
-      },
       if: () => (!addrs.self),
     },
     {
@@ -266,44 +273,53 @@ export default () => {
       ) : (
         'Enter A Name To Use As Reverse'
       ),
-      func: async () => {
-        if(!name || addrs.name === name) {
-          if(name) {
-            alert(`Reverse Already Set To: ${name}`)
-          }
-          return input.current?.focus()
-        }
-        if(
-          !addrs.name
-          || window.confirm(`Overwrite ${addrs.name}?`)
-        ) {
-          if(!tracts.registrar) {
-            throw new Error('Reverse Registrar Contract Not Set')
-          }
-          setLoading(true)
-          await (
-            tracts.registrar.methods
-            .setName(name)
-            .send({ from: addrs.self })
-          )
-          updateTract({ resolver: undefined })
-          updateAddr({ name: undefined, owner: undefined })
-          setLoading(false)
-        }
-      },
       if: () => (
-        ![
-          addrs.net, addrs.reverse, addrs.registrar,
-          addrs.address, addrs.owner,
-          addrs.name, tracts.resolver,
-          tracts.registrar, tracts.reverseResolver,
+        !name
+        || ![
+          name, addrs.name, tracts.registrar,
         ].some(tract => tract === undefined)
       )
     }
   ]
 
+  const submission = async (evt: FormEvent) => {
+    try {
+      if(!web3) {
+        return setProvider(await web3Modal.connect())
+      }
+      if(!name || addrs.name === name) {
+        if(name) {
+          alert(`Reverse Already Set To: ${name}`)
+        }
+        return input.current?.focus()
+      }
+      if(
+        !addrs.name
+        || window.confirm(`Overwrite ${addrs.name}?`)
+      ) {
+        if(!tracts.registrar) {
+          throw new Error('Reverse Registrar Contract Not Set')
+        }
+        setLoading(true)
+        await (
+          tracts.registrar.methods
+          .setName(name)
+          .send({ from: addrs.self })
+        )
+        setOnce(false) // trigger reevaluation
+      }
+    } catch(err) {
+      alert(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
-    <Container maxW="100%">
+    <Container
+      maxW="100%" as="form"
+      action="#" onSubmit={submission}
+    >
       <Stack>
         <Flex justify="center" justifyItems="center">
           <Text m={0} mr={2} alignSelf="center">
@@ -312,11 +328,9 @@ export default () => {
           <Input
             w="auto" textAlign="center"
             placeholder="Exe: sample.ens.eth"
-            value={name ?? ''} ref={input}
+            autoFocus value={name ?? ''} ref={input}
             onChange={(evt) => {
               setName(evt.target.value)
-              updateAddr({ address: undefined })
-              updateTract({ resolver: undefined })
             }}
           />
         </Flex>
@@ -379,17 +393,9 @@ export default () => {
         {handlers.map((h, i) => (
           <Button
             key={i}
-            onClick={async () => {
-              try {
-                await h.func()
-              } catch(err) {
-                console.error(err)
-                alert(err.message)
-                setLoading(false)
-              }
-            }}
             disabled={loading || (h.if ? !h.if() : false)}
             m={0} mt="0 ! important"
+            onClick={submission}
           >
             {loading && (i + 1 === handlers.length) && (
               <Spinner size="sm" mr={3}/>
@@ -397,6 +403,7 @@ export default () => {
             {h.name}
           </Button>
         ))}
+        <Input type="submit" display="none"/>
       </Stack>
     </Container>
   )
