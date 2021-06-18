@@ -74,7 +74,7 @@ const tooltips: Record<string, string> = {
 export default () => {
   const params = useParams<Parameters>()
   const [name, setName] = useState(params.name)
-  const [web3, setWeb3] = useState<Web3>()
+  const [web3, setWeb3] = useState<Web3 | null>(null)
   const [titles, setTitles] = useState({
     self: 'Your Address',
     net: 'Current Network',
@@ -87,7 +87,9 @@ export default () => {
   })
   const [addrs, setAddrs] = useState<Addresses>({})
   const [tracts, setTracts] = useState<Contracts>({})
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = (
+    useState<number | null>(null)
+  )
   const [once, setOnce] = useState(false)
   const toast = useToast()
   const placement = (
@@ -100,12 +102,6 @@ export default () => {
   }
   const updateTract = (obj: object) => {
     setTracts(ts => ({ ...ts, ...obj }))
-  }
-
-  const reset = () => {
-    setAddrs({})
-    setTracts({})
-    setOnce(false)
   }
 
   const resolve = useCallback(async (name) => {
@@ -139,12 +135,28 @@ export default () => {
 
       if(provider.on) {
         log('Listening to Provider')
-        provider.on('disconnect', reset)
+
+        const reset = () => {
+          setAddrs({})
+          setTracts({})
+          setOnce(false)
+        }
+
+        const clearAccount = () => {
+          web3Modal.clearCachedProvider()
+          setWeb3(null)
+          reset()
+        }
+        provider.on('disconnect', clearAccount)
+
         provider.on('chainChanged', reset)
 
         const resetAccount = (accts: string[]) => {
-          reset()
-          updateAddr({ self: accts[0] })
+          if(accts.length === 0) {
+            clearAccount()
+          } else {
+            reset()
+          }
         }
         provider.on('accountsChanged', resetAccount)
       }
@@ -260,11 +272,96 @@ export default () => {
         }
       }
     })()
-  }, [web3, once, name, toast])
+  }, [web3, once, name, toast, resolve])
+
+  const connect = async () => {
+    if(!web3) {
+      setProvider(await web3Modal.connect())
+    }
+  }
+
+  const reverse = async () => {
+    if(!name || addrs.name === name) {
+      if(name) {
+        alert(`Reverse Already Set To: ${name}`)
+      }
+      return input.current?.focus()
+    }
+    if(
+      !addrs.name
+      || window.confirm(`Overwrite current reverse: ${addrs.name}?`)
+    ) {
+      if(!tracts.registrar) {
+        throw new Error('Reverse Registrar Contract Not Set')
+      }
+      await (
+        tracts.registrar.methods
+        .setName(name)
+        .send({ from: addrs.self })
+      )
+      setOnce(false) // trigger reevaluation
+    }
+  }
+
+  const forward = async () => {
+    if(!web3) return null
+    if(!addrs.self) throw new Error('Wallet Address Not Set')
+
+    const log = logger(
+      'color: green; background-color: purple; font-size: 150%'
+    )
+    const domain = name ?? ''
+    const parts = domain.split('.')
+    if(parts.length < 2) {
+      throw new Error(`Not Enough Parts In: "${domain}"`)
+    } else {
+      let idx
+      for(idx = parts.length; idx >= 1; idx--) {
+        const name = parts.slice(-idx).join('.')
+        log('Checking Name', name)
+        if(await web3.eth.ens.recordExists(name)) {
+          break
+        }
+      }
+      if(idx === 0) {
+        throw new Error(`${domain} is not a supported domain.`)
+      }
+      if(idx === parts.length) {
+        if(window.confirm(`Overwrite current record: ${name}?`)) {
+          --idx
+        } else {
+          return null
+        }
+      }
+      const part = parts.slice(0, -idx).join('.')
+      const base = parts.slice(-idx).join('.')
+      const owner = await web3.eth.ens.getOwner(base)
+      const resolver = await web3.eth.ens.getResolver(base)
+      const resolverAddress = resolver.options.address
+      const ttl = await web3.eth.ens.getTTL(base)
+      log('Writing', {
+        part, base, address: addrs.self,
+        resolverAddress, ttl, owner, resolver,
+      })
+      if(addrs.self !== owner) {
+        alert(`Only the owner of ${base}, ${owner}, can write subdomains.`)
+      } else {
+        await web3.eth.ens.setSubnodeRecord(
+          base, part, addrs.self, resolverAddress, ttl,
+          { from: addrs.self, to: owner },
+        )
+        await web3.eth.ens.setAddress(
+          domain, addrs.self, { from: addrs.self }
+        )
+        setOnce(false)
+      }
+    }
+  }
 
   const handlers = [
     {
       name: 'Connect Ethereum Wallet',
+      func: connect,
       if: () => (!addrs.self),
     },
     {
@@ -273,52 +370,41 @@ export default () => {
       ) : (
         'Enter A Name To Use As Reverse'
       ),
+      func: reverse,
       if: () => (
         !name
         || ![
           name, addrs.name, tracts.registrar,
         ].some(tract => tract === undefined)
       )
+    },
+    {
+      name: name ? (
+        `Set A Forward Record For ${name}`
+      ) : (
+        'Enter A Name To Use Set'
+      ),
+      func: forward,
+      if: () => (
+        !name
+        || ![
+          name, addrs.self,
+        ].some(tract => tract === undefined)
+      )
     }
   ]
 
-  const submission = async (evt: FormEvent) => {
-    try {
-      if(!web3) {
-        return setProvider(await web3Modal.connect())
-      }
-      if(!name || addrs.name === name) {
-        if(name) {
-          alert(`Reverse Already Set To: ${name}`)
-        }
-        return input.current?.focus()
-      }
-      if(
-        !addrs.name
-        || window.confirm(`Overwrite ${addrs.name}?`)
-      ) {
-        if(!tracts.registrar) {
-          throw new Error('Reverse Registrar Contract Not Set')
-        }
-        setLoading(true)
-        await (
-          tracts.registrar.methods
-          .setName(name)
-          .send({ from: addrs.self })
-        )
-        setOnce(false) // trigger reevaluation
-      }
-    } catch(err) {
-      alert(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
     <Container
-      maxW="100%" as="form"
-      action="#" onSubmit={submission}
+      maxW="100%" as="form" action="#"
+      onSubmit={(evt: FormEvent) => {
+        evt.preventDefault()
+        if(!web3) {
+          connect()
+        } else {
+          reverse()
+        }
+      }}
     >
       <Stack>
         <Flex justify="center" justifyItems="center">
@@ -393,11 +479,20 @@ export default () => {
         {handlers.map((h, i) => (
           <Button
             key={i}
-            disabled={loading || (h.if ? !h.if() : false)}
+            disabled={!!loading || (h.if ? !h.if() : false)}
             m={0} mt="0 ! important"
-            onClick={submission}
+            onClick={async () => {
+              try {
+                setLoading(i)
+                await h.func()
+              } catch(err) {
+                alert(err.message)
+              } finally {
+                setLoading(null)
+              }
+            }}
           >
-            {loading && (i + 1 === handlers.length) && (
+            {loading === i && (
               <Spinner size="sm" mr={3}/>
             )}
             {h.name}
