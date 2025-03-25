@@ -1,10 +1,10 @@
 {
   "name": "reverse-ens",
-  "author": "Will Holcomb <dys@dhappy.org>",
+  "author": "dysbulic <dys@dhappy.org>",
   "version": "1.0.0",
   "private": false,
-  "homepage": "https://dysbulic.dhappy.org/reverse-ens",
-  "license": "MIT",
+  "homepage": "https://dysbulic.github.io/reverse-ens/",
+  "license": "CC0-1.0",
   "dependencies": {
     "@chakra-ui/icons": "^1.0.13",
     "@chakra-ui/react": "^1.6.3",

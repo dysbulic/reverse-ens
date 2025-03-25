@@ -318,7 +318,6 @@ export default () => {
       let idx
       for(idx = parts.length; idx >= 1; idx--) {
         const name = parts.slice(-idx).join('.')
-        log('Checking Name', name)
         if(await web3.eth.ens.recordExists(name)) {
           break
         }
@@ -335,6 +334,9 @@ export default () => {
       }
       const part = parts.slice(0, -idx).join('.')
       const base = parts.slice(-idx).join('.')
+
+      log('Split Name', { base, part })
+
       const owner = await web3.eth.ens.getOwner(base)
       const resolver = await web3.eth.ens.getResolver(base)
       const resolverAddress = resolver.options.address
